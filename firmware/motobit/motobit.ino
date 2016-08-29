@@ -11,11 +11,12 @@
 
 #include <Adafruit_GPS.h>
 
-#define GPS_SEND_TIME 10000
+#define GPS_SEND_TIME 10000     //read gps every 10 seconds
 #define LED_DATA_INDICATOR_DURATION 200
 #define LED_DATA_INDICATOR_FLICKER_OFF_DURATION 50
 #define LED_DATA_INDICATOR_FLICKER_ON_DURATION 5
-#define BUFFER_LENGTH 7
+#define BUFFER_LENGTH 25
+const String LOST_SMS_TRIGGER="LOST";
 //#define LOST_SMS_TRIGGER "LOST"
 
 // set to true for raw GPS debugging to Serial console
@@ -36,6 +37,8 @@ uint32_t gpsOutputTimer;
 uint32_t gpsReadTimer;
 String smsPayload = "";
 String tempBuffer = "";
+String payloadArray[BUFFER_LENGTH];
+int arrayIndex = 0;
 
 void setup() {
     Dash.begin();
@@ -77,26 +80,26 @@ void loop() {
         }
 
         if (foundSMS && currChar == '\n') {
-            // handleSMS();
+            handleSMS();
         } else {
             smsPayload.concat(currChar);
         }
 
-        if (tempBuffer.length() >= BUFFER_LENGTH) {
+        if (tempBuffer.length() >= 7) {
             tempBuffer.remove(0, 1);
         }
 
         tempBuffer.concat(currChar);
-        SerialUSB.write(currChar);
+        // SerialUSB.write(currChar);
     }
 
     GPSloop();
     gpsReadTimer = millis();
 
-    //// if millis() or timer wraps around, we'll just reset it
-   if (gpsOutputTimer > millis()) {
-      gpsOutputTimer = millis();
-   }
+    // if millis() or timer wraps around, we'll just reset it
+    if (gpsOutputTimer > millis()) {
+        gpsOutputTimer = millis();
+    }
 }
 
 void GPSloop() {
@@ -118,53 +121,90 @@ void GPSloop() {
         }
     }
 
+    if (arrayIndex == BUFFER_LENGTH) {
+        sendDataToCloud();
+    }
+
     // print out the current stats and send to cloud
     if (millis() - gpsOutputTimer > GPS_SEND_TIME) {
         gpsOutputTimer = millis(); // reset the timer
 
-        SerialUSB.print("\nTime: ");
-        SerialUSB.print(GPS.hour, DEC); SerialUSB.print(':');
-        SerialUSB.print(GPS.minute, DEC); SerialUSB.print(':');
-        SerialUSB.print(GPS.seconds, DEC); SerialUSB.print('.');
-        SerialUSB.println(GPS.milliseconds);
-        SerialUSB.print("Date: ");
-        SerialUSB.print(GPS.day, DEC); SerialUSB.print('/');
-        SerialUSB.print(GPS.month, DEC); SerialUSB.print("/20");
-        SerialUSB.println(GPS.year, DEC);
-        SerialUSB.print("Fix: "); SerialUSB.print((int)GPS.fix);
-        SerialUSB.print(" quality: "); SerialUSB.println((int)GPS.fixquality);
         if (GPS.fix) {
-            SerialUSB.print("Location: ");
-            SerialUSB.print(GPS.latitude, 4); SerialUSB.print(GPS.lat);
-            SerialUSB.print(", ");
-            SerialUSB.print(GPS.longitude, 4); SerialUSB.println(GPS.lon);
+            String payloadString = buildGPSPayload();
+            payloadArray[arrayIndex] = payloadString;
+            arrayIndex++;
 
-            SerialUSB.print("Speed (knots): "); SerialUSB.println(GPS.speed);
-            SerialUSB.print("Angle: "); SerialUSB.println(GPS.angle);
-            SerialUSB.print("Altitude: "); SerialUSB.println(GPS.altitude);
-            SerialUSB.print("Satellites: "); SerialUSB.println((int)GPS.satellites);
-
-            // Send latitude and longitude to cloud
-            String loc;
-            char coordbuf[16];
-            dtostrf(GPS.latitudeDegrees, 0, 4, coordbuf);
-            loc.concat(coordbuf);
-            loc.concat(", ");
-            dtostrf(GPS.longitudeDegrees, 0, 4, coordbuf);
-            loc.concat(coordbuf);
-            String ret = "{\"coords\": [";
-            ret.concat(loc);
-            ret.concat("]}");
-            SerialCloud.println(ret);
+            SerialUSB.print("Location String: ");
+            SerialUSB.println(payloadString);
+            SerialUSB.print("Quality: ");
+            SerialUSB.print((int) GPS.fixquality);
+            SerialUSB.print(" Satellites: ");
+            SerialUSB.print((int) GPS.satellites);
+        } else {
+            SerialUSB.print("No GPS fix. Quality: ");
+            SerialUSB.print((int) GPS.fixquality);
+            SerialUSB.print("  Time: ");
+            SerialUSB.print(GPS.hour, DEC); SerialUSB.print(':');
+            SerialUSB.print(GPS.minute, DEC); SerialUSB.print(':');
+            SerialUSB.print(GPS.seconds, DEC); SerialUSB.print('.');
+            SerialUSB.print(GPS.milliseconds);
+            SerialUSB.print("  Date: ");
+            SerialUSB.print(GPS.day, DEC); SerialUSB.print('/');
+            SerialUSB.print(GPS.month, DEC); SerialUSB.print("/20");
+            SerialUSB.print(GPS.year, DEC);
+            SerialUSB.println("");
         }
     }
+}
+
+void sendDataToCloud() {
+    String payload;
+    for (int i = 0; i < BUFFER_LENGTH; i++) {
+        payload.concat(payloadArray[i]);
+        payload.concat("#");
+    }
+    SerialCloud.println(payload);
+    arrayIndex = 0;
+}
+
+String buildGPSPayload() {
+    // LAT|LON|speed|altitude|time
+    String payloadString;
+    char decimalBuffer[16];
+
+    // latitude
+    dtostrf(GPS.latitudeDegrees, 0, 5, decimalBuffer);
+    payloadString.concat(decimalBuffer);
+    payloadString.concat("|");
+    // longitude
+    dtostrf(GPS.longitudeDegrees, 0, 5, decimalBuffer);
+    payloadString.concat(decimalBuffer);
+    payloadString.concat("|");
+    // speed
+    dtostrf(GPS.speed, 0, 2, decimalBuffer);
+    payloadString.concat(decimalBuffer);
+    payloadString.concat("|");
+    // altitude
+    dtostrf(GPS.altitude, 0, 4, decimalBuffer);
+    payloadString.concat(decimalBuffer);
+    payloadString.concat("|");
+    // time
+    payloadString.concat(GPS.hour);
+    payloadString.concat(":");
+    payloadString.concat(GPS.minute);
+    payloadString.concat(":");
+    payloadString.concat(GPS.seconds);
+    payloadString.concat(".");
+    payloadString.concat(GPS.milliseconds);
+
+    return payloadString;
 }
 
 void handleSMS() {
     smsPayload = stripOffLengthNumber(smsPayload);
     smsPayload.toUpperCase();
 
-    if (smsPayload == "LOST") {
+    if (smsPayload == LOST_SMS_TRIGGER) {
         SerialUSB.println("LOST mode triggered!");
         //respond with SMS to number with GPS coordinates here
     }
