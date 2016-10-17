@@ -1,31 +1,15 @@
-// MotoBit
-// track GPS coords, push to cloud
-//// keep a buffer to keep data costs down
-// track lean angle with accelerometer
-//// when GPS speed is 0, use that to orientate 0 degrees
-//// when bike is off, use this as lojack feature to send SMS
-// SMS feature
-//// as lojack as mentioned above
-//// can send LOST command and replies with coordinates
-//// also crash detection feature potentially
-
 #include <Adafruit_GPS.h>
 
-#define GPS_SEND_TIME 10000     //read gps every 10 seconds
+#define GPS_SEND_TIME 5000     //read gps every 5 seconds
 #define LED_DATA_INDICATOR_DURATION 200
 #define LED_DATA_INDICATOR_FLICKER_OFF_DURATION 50
 #define LED_DATA_INDICATOR_FLICKER_ON_DURATION 5
 #define BUFFER_LENGTH 25
 const String LOST_SMS_TRIGGER="LOST";
-//#define LOST_SMS_TRIGGER "LOST"
-
-// set to true for raw GPS debugging to Serial console
-#define GPS_DEBUG false
-
-#define gpsSerial Serial0
+#define GPS_DEBUG false     // set to true for raw GPS debugging to Serial console
+#define gpsSerial Serial0   // serial0 uses pins 3 and 5
 
 Adafruit_GPS GPS(&gpsSerial);
-
 unsigned ledStartMillis;
 unsigned ledNextFlickerMillis;
 bool uplinkDataDetected;
@@ -38,31 +22,27 @@ uint32_t gpsReadTimer;
 String smsPayload = "";
 String tempBuffer = "";
 String payloadArray[BUFFER_LENGTH];
-int arrayIndex = 0;
 
 void setup() {
     Dash.begin();
-    SerialUSB.begin(9600);
-    Serial2.begin(9600);
     SerialCloud.begin(115200);
-
-    GPS.begin(9600);
+    SerialUSB.begin(9600);
     gpsSerial.begin(9600);
+    GPS.begin(9600);
+
     //turn on RMC (recommended minimum) and GGA (fix data) including altitude
     GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
     // Set the update rate
     GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);   // 1 Hz update rate
     // Request updates on antenna status, comment out to keep quiet
     GPS.sendCommand(PGCMD_ANTENNA);
-    delay(1000);
-    // Ask for firmware version
-    gpsSerial.println(PMTK_Q_RELEASE);
 
+    delay(3000);
     SerialUSB.println("MotoBit Tracker");
     SerialUSB.print("Boot Version: ");
     SerialUSB.print(Dash.bootVersion());
     SerialUSB.print("  GPS Firmware: ");
-    SerialUSB.print(PMTK_Q_RELEASE);
+    SerialUSB.println(PMTK_Q_RELEASE);
 }
 
 void loop() {
@@ -71,15 +51,18 @@ void loop() {
     while (SerialCloud.available()) {
         currChar = (char) SerialCloud.read();
 
-        if (!foundSMS && tempBuffer == "SMSRCVD") {
-            foundSMS = true;
-        }
-
-        if (!cloudReady && tempBuffer.substring(3) == "+++") {
+        if (!cloudReady && tempBuffer.startsWith("+++")) {
+            SerialUSB.println("cloudReady");
             cloudReady = true;
         }
 
+        if (!foundSMS && tempBuffer == "SMSRCVD") {
+            SerialUSB.println("SMSRCVD");
+            foundSMS = true;
+        }
+
         if (foundSMS && currChar == '\n') {
+            SerialUSB.println("handleSMS");
             handleSMS();
         } else {
             smsPayload.concat(currChar);
@@ -90,7 +73,7 @@ void loop() {
         }
 
         tempBuffer.concat(currChar);
-        // SerialUSB.write(currChar);
+        SerialUSB.write(currChar);
     }
 
     GPSloop();
@@ -121,9 +104,11 @@ void GPSloop() {
         }
     }
 
-    if (arrayIndex == BUFFER_LENGTH) {
-        sendDataToCloud();
-    }
+    SerialUSB.print("payloadArray length: ");
+    SerialUSB.println(payloadArray.count());
+    // if (payloadQueue.count() >= BUFFER_LENGTH) {
+    //     sendDataToCloud();
+    // }
 
     // print out the current stats and send to cloud
     if (millis() - gpsOutputTimer > GPS_SEND_TIME) {
@@ -131,18 +116,21 @@ void GPSloop() {
 
         if (GPS.fix) {
             String payloadString = buildGPSPayload();
-            payloadArray[arrayIndex] = payloadString;
-            arrayIndex++;
-
+            // payloadQueue.push(payloadString);
             SerialUSB.print("Location String: ");
             SerialUSB.println(payloadString);
+
             SerialUSB.print("Quality: ");
             SerialUSB.print((int) GPS.fixquality);
             SerialUSB.print(" Satellites: ");
             SerialUSB.print((int) GPS.satellites);
         } else {
+            String payloadString = buildGPSPayload();
+            // payloadQueue.push(payloadString);
             SerialUSB.print("No GPS fix. Quality: ");
             SerialUSB.print((int) GPS.fixquality);
+            SerialUSB.print("  Satellites: ");
+            SerialUSB.print((int) GPS.satellites);
             SerialUSB.print("  Time: ");
             SerialUSB.print(GPS.hour, DEC); SerialUSB.print(':');
             SerialUSB.print(GPS.minute, DEC); SerialUSB.print(':');
@@ -154,17 +142,26 @@ void GPSloop() {
             SerialUSB.print(GPS.year, DEC);
             SerialUSB.println("");
         }
+        // SerialUSB.print("payloadQueue length: ");
+        // SerialUSB.println(payloadQueue.count());
+        // SerialUSB.print("payloadQueue is full: ");
+        // SerialUSB.println(payloadQueue.isFull());
     }
 }
 
 void sendDataToCloud() {
-    String payload;
-    for (int i = 0; i < BUFFER_LENGTH; i++) {
-        payload.concat(payloadArray[i]);
-        payload.concat("#");
-    }
-    SerialCloud.println(payload);
-    arrayIndex = 0;
+    SerialUSB.println("sendDataToCloud()");
+    // while (!payloadQueue.isEmpty()) {
+    //     String payload;
+    //     for (int i = 0; i < BUFFER_LENGTH; i++) {
+    //         payload.concat(payloadQueue.pop());
+    //         payload.concat("#");
+    //     }
+    //     SerialCloud.println(payload);
+    //     SerialUSB.print("Sent payload: ");
+    //     SerialUSB.println(payload);
+    // }
+
 }
 
 String buildGPSPayload() {
