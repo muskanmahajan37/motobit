@@ -8,5 +8,8 @@
     "start": "node server.js"
   },
   "author": "Ross Hettel <ross@het.tel>",
-  "license": "ISC"
+  "license": "GPL-3.0",
+  "dependencies": {
+    "express": "^4.14.0"
+  }
 }
